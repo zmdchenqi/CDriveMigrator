@@ -48,6 +48,8 @@ public class ReferenceAnalyzer
     public async Task AnalyzeAsync(InstalledProgram program, IProgress<string>? progress = null, CancellationToken ct = default)
     {
         var installPath = program.InstallLocation.TrimEnd('\\');
+        if (string.IsNullOrWhiteSpace(installPath))
+            throw new ArgumentException($"程序 {program.Name} 的安装路径为空", nameof(program));
 
         // 使用线程安全的临时列表收集引用，避免后台线程操作 ObservableCollection
         var tempProgram = new InstalledProgram
@@ -137,7 +139,10 @@ public class ReferenceAnalyzer
                 }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[{program.Name}] 扫描卸载注册表项失败: {ex.Message}");
+        }
     }
 
     private static void ScanKnownRegistryLocations(InstalledProgram program, string installPath,
@@ -248,7 +253,10 @@ public class ReferenceAnalyzer
                         Description = $"注册表: {keyPath}\\{valName}"
                     });
                 }
-                catch { }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // Access denied for individual values is expected — skip silently
+                }
             }
 
             // Recurse into subkeys
@@ -258,7 +266,12 @@ public class ReferenceAnalyzer
                 ScanRegistryKeyRecursive(rootKey, $@"{keyPath}\{subKeyName}", program, installPath, maxDepth, ct, depth + 1);
             }
         }
-        catch { }
+        catch (System.Security.SecurityException) { }
+        catch (UnauthorizedAccessException) { }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            System.Diagnostics.Debug.WriteLine($"扫描注册表键失败 {keyPath}: {ex.Message}");
+        }
     }
 
     #endregion
@@ -316,10 +329,17 @@ public class ReferenceAnalyzer
                             });
                         }
                     }
-                    catch { }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"读取快捷方式失败 {lnkFile}: {ex.Message}");
+                    }
                 }
             }
-            catch { }
+            catch (UnauthorizedAccessException) { }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                progress?.Report($"[扫描快捷方式] 目录 {dir} 访问失败: {ex.Message}");
+            }
         }
     }
 
@@ -380,10 +400,16 @@ public class ReferenceAnalyzer
                         Description = $"服务: {svcKey.GetValue("DisplayName") as string ?? svcName}"
                     });
                 }
-                catch { }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    System.Diagnostics.Debug.WriteLine($"扫描服务 {svcName} 失败: {ex.Message}");
+                }
             }
         }
-        catch { }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            progress?.Report($"[扫描服务] 访问服务注册表失败: {ex.Message}");
+        }
     }
 
     #endregion
@@ -422,7 +448,10 @@ public class ReferenceAnalyzer
                 }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"扫描系统环境变量失败: {ex.Message}");
+        }
 
         // Check all user env vars
         try
@@ -448,7 +477,10 @@ public class ReferenceAnalyzer
                 }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"扫描用户环境变量失败: {ex.Message}");
+        }
     }
 
     private static void CheckEnvVar(InstalledProgram program, string installPath,
@@ -503,7 +535,12 @@ public class ReferenceAnalyzer
                     CreateNoWindow = true
                 };
 
-                using var proc = Process.Start(psi)!;
+                using var proc = Process.Start(psi);
+                if (proc == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("无法启动 schtasks.exe 查询计划任务");
+                    return;
+                }
                 using var reader = proc.StandardOutput;
 
                 while (!reader.EndOfStream)
@@ -515,7 +552,10 @@ public class ReferenceAnalyzer
                 }
                 proc.WaitForExit(15000);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"查询计划任务失败: {ex.Message}");
+            }
         }
     }
 
@@ -586,10 +626,17 @@ public class ReferenceAnalyzer
                         });
                     }
                 }
-                catch { }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    System.Diagnostics.Debug.WriteLine($"读取配置文件失败 {file}: {ex.Message}");
+                }
             }
         }
-        catch { }
+        catch (UnauthorizedAccessException) { }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            progress?.Report($"[{program.Name}] 扫描配置文件失败: {ex.Message}");
+        }
     }
 
     #endregion
