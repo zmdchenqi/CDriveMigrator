@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using System.ServiceProcess;
 
 namespace CDriveMigrator.Services;
 
@@ -33,6 +34,8 @@ public class MigrationEngine
             // Step 1: Validate
             program.Status = MigrationStatus.Analyzing;
             Report(0, "验证迁移条件...");
+
+            PathValidator.ValidateMigrationPaths(sourcePath, targetPath);
 
             if (!Directory.Exists(sourcePath))
                 throw new InvalidOperationException($"源目录不存在: {sourcePath}");
@@ -158,6 +161,8 @@ public class MigrationEngine
     private async Task MoveFilesAsync(string source, string target, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+
+        PathValidator.ValidateMigrationPaths(source, target);
 
         // Use robocopy for reliable cross-volume move with retry
         var psi = new ProcessStartInfo
@@ -452,6 +457,13 @@ public class MigrationEngine
             try
             {
                 var taskName = r.ValueName;
+
+                if (!PathValidator.IsValidTaskName(taskName))
+                {
+                    result.FailedFixes.Add($"计划任务名称包含不安全字符: {PathValidator.SanitizeForDisplay(taskName)}");
+                    continue;
+                }
+
                 // Export task XML, modify paths, re-import
                 var exportPath = Path.GetTempFileName();
                 try
@@ -628,6 +640,8 @@ public class MigrationEngine
             if (snapshot.FilesMoved && Directory.Exists(snapshot.TargetPath))
             {
                 Log?.Invoke("  移回文件...");
+                PathValidator.ValidateMigrationPaths(snapshot.SourcePath, snapshot.TargetPath);
+
                 if (Directory.Exists(snapshot.SourcePath) && !JunctionManager.IsJunction(snapshot.SourcePath))
                     Directory.Delete(snapshot.SourcePath, true);
 

@@ -64,7 +64,7 @@ public class AsyncRelayCommand : ICommand
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"操作出错:\n\n{ex.Message}\n\n{ex.StackTrace}",
+            MessageBox.Show($"操作出错:\n\n{ex.Message}",
                 "CDriveMigrator 错误", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally

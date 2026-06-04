@@ -78,7 +78,17 @@ public class MainViewModel : INotifyPropertyChanged
     public string TargetSubFolder
     {
         get => _targetSubFolder;
-        set { _targetSubFolder = value; OnPropertyChanged(); OnPropertyChanged(nameof(TargetPath)); }
+        set
+        {
+            if (!Helpers.PathValidator.IsValidSubFolder(value))
+            {
+                AddLog($"目标子目录名称无效: {Helpers.PathValidator.SanitizeForDisplay(value)}");
+                return;
+            }
+            _targetSubFolder = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(TargetPath));
+        }
     }
 
     public string TargetPath => Path.Combine(SelectedDrive, TargetSubFolder);
@@ -221,9 +231,9 @@ public class MainViewModel : INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            AddLog($"扫描出错: {ex.Message}\n{ex.StackTrace}");
+            AddLog($"扫描出错: {ex.Message}");
             StatusText = $"扫描出错: {ex.Message}";
-            MessageBox.Show($"扫描出错:\n\n{ex.Message}\n\n{ex.StackTrace}",
+            MessageBox.Show($"扫描出错:\n\n{ex.Message}",
                 "CDriveMigrator", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
@@ -606,15 +616,22 @@ public class MainViewModel : INotifyPropertyChanged
                     // 尝试用 cmd 强制删除
                     try
                     {
-                        var psi = new ProcessStartInfo
+                        if (Helpers.PathValidator.IsSafeForShell(installPath))
                         {
-                            FileName = "cmd.exe",
-                            Arguments = $"/c rd /s /q \"{installPath}\"",
-                            UseShellExecute = false,
-                            CreateNoWindow = true
-                        };
-                        using var p = Process.Start(psi);
-                        p?.WaitForExit(30000);
+                            var psi = new ProcessStartInfo
+                            {
+                                FileName = "cmd.exe",
+                                Arguments = $"/c rd /s /q \"{installPath}\"",
+                                UseShellExecute = false,
+                                CreateNoWindow = true
+                            };
+                            using var p = Process.Start(psi);
+                            p?.WaitForExit(30000);
+                        }
+                        else
+                        {
+                            AddLog($"    ⚠ 路径包含不安全字符，跳过强制删除");
+                        }
                     }
                     catch { }
                 }
