@@ -455,6 +455,8 @@ public class MainViewModel : INotifyPropertyChanged
         {
             StatusText = $"迁移出错: {ex.Message}";
             AddLog($"迁移出错: {ex.Message}");
+            MessageBox.Show($"迁移过程出错:\n\n{ex.Message}", "迁移错误",
+                MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
@@ -575,10 +577,16 @@ public class MainViewModel : INotifyPropertyChanged
                             proc.WaitForExit(5000);
                         }
                     }
-                    catch { }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        AddLog($"    ⚠ 终止进程失败: {ex.Message}");
+                    }
                 }
             }
-            catch { }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                AddLog($"    ⚠ 枚举进程失败: {ex.Message}");
+            }
 
             ct.ThrowIfCancellationRequested();
 
@@ -616,7 +624,10 @@ public class MainViewModel : INotifyPropertyChanged
                         using var p = Process.Start(psi);
                         p?.WaitForExit(30000);
                     }
-                    catch { }
+                    catch (Exception ex2)
+                    {
+                        AddLog($"    ⚠ cmd.exe 强制删除也失败: {ex2.Message}");
+                    }
                 }
             }
 
@@ -665,10 +676,16 @@ public class MainViewModel : INotifyPropertyChanged
                             AddLog($"    注册表项已删除: {basePath}\\{subName}");
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        AddLog($"    ⚠ 清理注册表项 {subName} 失败: {ex.Message}");
+                    }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                AddLog($"    ⚠ 打开注册表路径 {basePath} 失败: {ex.Message}");
+            }
         }
 
         // HKCU
@@ -689,11 +706,17 @@ public class MainViewModel : INotifyPropertyChanged
                             AddLog($"    HKCU注册表项已删除: {subName}");
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        AddLog($"    ⚠ 清理 HKCU 注册表项 {subName} 失败: {ex.Message}");
+                    }
                 }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AddLog($"    ⚠ 打开 HKCU 注册表失败: {ex.Message}");
+        }
 
         // 清理已分析到的注册表引用
         foreach (var r in program.References.Where(r => r.Type == ReferenceType.RegistryValue))
@@ -718,7 +741,10 @@ public class MainViewModel : INotifyPropertyChanged
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                AddLog($"    ⚠ 清理注册表引用 {r.Location}: {ex.Message}");
+            }
         }
     }
 
@@ -748,10 +774,16 @@ public class MainViewModel : INotifyPropertyChanged
                             AddLog($"    快捷方式已删除: {Path.GetFileName(lnk)}");
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        AddLog($"    ⚠ 删除快捷方式 {Path.GetFileName(lnk)} 失败: {ex.Message}");
+                    }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                AddLog($"    ⚠ 扫描快捷方式目录 {dir} 失败: {ex.Message}");
+            }
         }
     }
 

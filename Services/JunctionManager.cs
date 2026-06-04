@@ -27,13 +27,16 @@ public static class JunctionManager
             CreateNoWindow = true
         };
 
-        using var proc = Process.Start(psi)!;
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException($"无法启动 cmd.exe 创建联接点: {junctionPath}");
+        var stderrTask = proc.StandardError.ReadToEndAsync();
+        proc.StandardOutput.ReadToEnd();
         proc.WaitForExit(30000);
 
         if (proc.ExitCode != 0)
         {
-            var err = proc.StandardError.ReadToEnd();
-            throw new InvalidOperationException($"创建联接点失败: {err}");
+            var err = stderrTask.Result;
+            throw new InvalidOperationException($"创建联接点失败 (exit code {proc.ExitCode}): {err}");
         }
     }
 
@@ -72,7 +75,8 @@ public static class JunctionManager
                 RedirectStandardOutput = true,
                 CreateNoWindow = true
             };
-            using var proc = Process.Start(psi)!;
+            using var proc = Process.Start(psi);
+            if (proc == null) return null;
             var output = proc.StandardOutput.ReadToEnd();
             proc.WaitForExit(10000);
 

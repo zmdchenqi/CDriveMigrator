@@ -278,7 +278,12 @@ public class ProgramScanner
                     IsSystemComponent = false
                 });
             }
-            catch { }
+            catch (System.Security.SecurityException) { }
+            catch (UnauthorizedAccessException) { }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"读取注册表项 {subKeyName} 失败: {ex.Message}");
+            }
         }
     }
 
@@ -302,10 +307,15 @@ public class ProgramScanner
                 AttributesToSkip = FileAttributes.ReparsePoint
             }))
             {
-                try { size += fi.Length; } catch { }
+                try { size += fi.Length; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }
         }
-        catch { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"计算目录大小失败 {path}: {ex.Message}");
+        }
         return size;
     }
 }

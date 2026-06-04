@@ -28,6 +28,9 @@ public class MigrationEngine
         var folderName = Path.GetFileName(sourcePath);
         var targetPath = Path.Combine(targetRoot, folderName);
 
+        if (string.IsNullOrEmpty(folderName))
+            throw new InvalidOperationException($"无法从路径提取文件夹名: {sourcePath}");
+
         try
         {
             // Step 1: Validate
@@ -72,7 +75,7 @@ public class MigrationEngine
 
             // Step 5: Stop related services
             Report(18, "停止相关服务...");
-            await StopRelatedServices(program, ct);
+            await StopRelatedServices(program, ct, result);
 
             // Step 6: Move files
             Report(20, $"迁移文件: {sourcePath} → {targetPath}");
@@ -110,7 +113,7 @@ public class MigrationEngine
 
             // Step 9: Restart services
             Report(95, "重新启动服务...");
-            await RestartServices(program, ct);
+            await RestartServices(program, ct, result);
 
             // Step 10: Verify
             program.Status = MigrationStatus.Verifying;
@@ -143,7 +146,12 @@ public class MigrationEngine
             if (snapshot != null)
             {
                 Log?.Invoke("正在回滚...");
-                await RollbackAsync(snapshot);
+                var rollbackOk = await RollbackAsync(snapshot);
+                if (!rollbackOk)
+                {
+                    result.Warnings.Add("回滚过程中出现错误，系统可能处于不一致状态，请手动检查");
+                    Log?.Invoke("⚠ 回滚未完全成功，请手动检查系统状态");
+                }
             }
             program.Status = MigrationStatus.Failed;
             result.Success = false;
@@ -171,7 +179,8 @@ public class MigrationEngine
         };
 
         Log?.Invoke($"  robocopy /E /MOVE /R:5 /W:2");
-        using var proc = Process.Start(psi)!;
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException("无法启动 robocopy 进程");
 
         var outputTask = Task.Run(async () =>
         {
@@ -203,7 +212,12 @@ public class MigrationEngine
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
-            using var retryProc = Process.Start(retryPsi)!;
+            using var retryProc = Process.Start(retryPsi);
+            if (retryProc == null)
+            {
+                Log?.Invoke("  ⚠ 无法启动 robocopy 重试进程");
+                return;
+            }
             await retryProc.WaitForExitAsync(ct);
 
             if (retryProc.ExitCode >= 8 && Directory.Exists(source) && 
@@ -223,7 +237,10 @@ public class MigrationEngine
                 if (!Directory.EnumerateFileSystemEntries(source).Any())
                     Directory.Delete(source, true);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log?.Invoke($"  ⚠ 清理空源目录失败: {ex.Message}");
+            }
         }
     }
 
@@ -245,11 +262,17 @@ public class MigrationEngine
                         await proc.WaitForExitAsync(ct).WaitAsync(TimeSpan.FromSeconds(5), ct);
                     }
                 }
-                catch { }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Log?.Invoke($"  ⚠ 检查/终止进程失败: {ex.Message}");
+                }
                 finally { proc.Dispose(); }
             }
         }
-        catch { }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log?.Invoke($"  ⚠ 枚举进程失败: {ex.Message}");
+        }
         
         // 等待文件句柄释放
         await Task.Delay(2000, ct);
@@ -272,7 +295,10 @@ public class MigrationEngine
                     if (!File.Exists(destFile))
                         File.Copy(file, destFile, true);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Log?.Invoke($"  ⚠ 复制锁定文件失败 {Path.GetFileName(file)}: {ex.Message}");
+                }
 
                 // 标记重启后删除源文件
                 NativeMethods.MoveFileEx(file, null, 
@@ -541,7 +567,10 @@ public class MigrationEngine
                     await proc.WaitForExitAsync(ct).WaitAsync(TimeSpan.FromSeconds(10), ct);
                 }
             }
-            catch { }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Log?.Invoke($"  ⚠ 停止进程 {proc.ProcessName} 失败: {ex.Message}");
+            }
             finally
             {
                 proc.Dispose();
@@ -549,7 +578,7 @@ public class MigrationEngine
         }
     }
 
-    private async Task StopRelatedServices(InstalledProgram program, CancellationToken ct)
+    private async Task StopRelatedServices(InstalledProgram program, CancellationToken ct, MigrationResult? result = null)
     {
         var svcRefs = program.References.Where(r => r.Type == ReferenceType.WindowsService).ToList();
         foreach (var r in svcRefs)
@@ -567,11 +596,12 @@ public class MigrationEngine
             catch (Exception ex)
             {
                 Log?.Invoke($"  ⚠ 无法停止服务 {r.ValueName}: {ex.Message}");
+                result?.Warnings.Add($"无法停止服务 {r.ValueName}: {ex.Message}");
             }
         }
     }
 
-    private async Task RestartServices(InstalledProgram program, CancellationToken ct)
+    private async Task RestartServices(InstalledProgram program, CancellationToken ct, MigrationResult? result = null)
     {
         var svcRefs = program.References.Where(r => r.Type == ReferenceType.WindowsService && r.IsFixed).ToList();
         foreach (var r in svcRefs)
@@ -589,6 +619,7 @@ public class MigrationEngine
             catch (Exception ex)
             {
                 Log?.Invoke($"  ⚠ 无法启动服务 {r.ValueName}: {ex.Message}");
+                result?.Warnings.Add($"无法重启服务 {r.ValueName}: {ex.Message}");
             }
         }
     }
@@ -597,9 +628,10 @@ public class MigrationEngine
 
     #region Rollback
 
-    public async Task RollbackAsync(MigrationSnapshot snapshot)
+    public async Task<bool> RollbackAsync(MigrationSnapshot snapshot)
     {
         Log?.Invoke($"开始回滚: {snapshot.ProgramName}");
+        var errors = new List<string>();
 
         try
         {
@@ -607,7 +639,16 @@ public class MigrationEngine
             if (snapshot.JunctionCreated && JunctionManager.IsJunction(snapshot.SourcePath))
             {
                 Log?.Invoke("  移除联接点...");
-                JunctionManager.RemoveJunction(snapshot.SourcePath);
+                try
+                {
+                    JunctionManager.RemoveJunction(snapshot.SourcePath);
+                }
+                catch (Exception ex)
+                {
+                    var msg = $"移除联接点失败: {ex.Message}";
+                    Log?.Invoke($"  ⚠ {msg}");
+                    errors.Add(msg);
+                }
             }
 
             // 2. Restore registry values
@@ -620,7 +661,9 @@ public class MigrationEngine
                 }
                 catch (Exception ex)
                 {
-                    Log?.Invoke($"  ⚠ 注册表恢复失败: {ex.Message}");
+                    var msg = $"注册表恢复失败 {backup.Reference.Location}: {ex.Message}";
+                    Log?.Invoke($"  ⚠ {msg}");
+                    errors.Add(msg);
                 }
             }
 
@@ -638,21 +681,48 @@ public class MigrationEngine
                         FileName = "robocopy",
                         Arguments = $"\"{snapshot.TargetPath}\" \"{snapshot.SourcePath}\" /E /MOVE /R:3 /W:1 /NP /NDL /NFL /NJH /NJS",
                         UseShellExecute = false,
+                        RedirectStandardError = true,
                         CreateNoWindow = true
                     };
-                    using var proc = Process.Start(psi)!;
+                    using var proc = Process.Start(psi);
+                    if (proc == null)
+                    {
+                        var msg = "无法启动 robocopy 进行文件回滚";
+                        Log?.Invoke($"  ⚠ {msg}");
+                        errors.Add(msg);
+                        return;
+                    }
                     proc.WaitForExit(300000);
+                    if (proc.ExitCode >= 8)
+                    {
+                        var stderr = proc.StandardError.ReadToEnd();
+                        var msg = $"文件回滚 robocopy 返回错误代码 {proc.ExitCode}: {stderr}";
+                        Log?.Invoke($"  ⚠ {msg}");
+                        errors.Add(msg);
+                    }
                 });
             }
 
             // 4. Broadcast env change
             BroadcastEnvironmentChange();
 
-            Log?.Invoke($"✓ 回滚完成: {snapshot.ProgramName}");
+            if (errors.Count == 0)
+            {
+                Log?.Invoke($"✓ 回滚完成: {snapshot.ProgramName}");
+                return true;
+            }
+            else
+            {
+                Log?.Invoke($"⚠ 回滚完成但有 {errors.Count} 个错误: {snapshot.ProgramName}");
+                foreach (var err in errors)
+                    Log?.Invoke($"  - {err}");
+                return false;
+            }
         }
         catch (Exception ex)
         {
             Log?.Invoke($"✗ 回滚出错: {ex.Message}");
+            return false;
         }
     }
 
@@ -708,7 +778,11 @@ public class MigrationEngine
             var json = JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(filePath, json);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Log?.Invoke($"⚠ 保存回滚快照失败: {ex.Message}");
+            throw new InvalidOperationException($"无法保存回滚快照，迁移终止以保障安全: {ex.Message}", ex);
+        }
     }
 
     private void VerifyMigration(InstalledProgram program, string targetPath, MigrationResult result)
@@ -741,7 +815,12 @@ public class MigrationEngine
                     result.Warnings.Add($"无法通过 Junction 访问: {Path.GetFileName(exe)}");
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            var msg = $"验证可执行文件可访问性时出错: {ex.Message}";
+            Log?.Invoke($"  ⚠ {msg}");
+            result.Warnings.Add(msg);
+        }
     }
 
     #endregion
@@ -802,7 +881,7 @@ public class MigrationEngine
         return null;
     }
 
-    private static void RunProcess(string fileName, string arguments, out string output)
+    private static int RunProcess(string fileName, string arguments, out string output)
     {
         var psi = new ProcessStartInfo
         {
@@ -813,9 +892,15 @@ public class MigrationEngine
             RedirectStandardError = true,
             CreateNoWindow = true
         };
-        using var proc = Process.Start(psi)!;
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException($"无法启动进程: {fileName}");
+        // Read stderr asynchronously to prevent deadlock when both streams are redirected
+        var stderrTask = proc.StandardError.ReadToEndAsync();
         output = proc.StandardOutput.ReadToEnd();
-        proc.WaitForExit(30000);
+        stderrTask.Wait(30000);
+        if (!proc.WaitForExit(30000))
+            throw new TimeoutException($"进程 '{fileName}' 在 30 秒内未退出");
+        return proc.ExitCode;
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Auto)]
@@ -823,7 +908,7 @@ public class MigrationEngine
         IntPtr hWnd, uint msg, UIntPtr wParam, string lParam,
         uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
 
-    private static void BroadcastEnvironmentChange()
+    private void BroadcastEnvironmentChange()
     {
         try
         {
@@ -833,7 +918,10 @@ public class MigrationEngine
             SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, UIntPtr.Zero,
                 "Environment", SMTO_ABORTIFHUNG, 5000, out _);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Log?.Invoke($"⚠ 广播环境变量更新失败: {ex.Message}");
+        }
     }
 
     private static string SanitizeFileName(string name)
