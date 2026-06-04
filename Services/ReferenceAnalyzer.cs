@@ -1,3 +1,4 @@
+using CDriveMigrator.Helpers;
 using CDriveMigrator.Models;
 using Microsoft.Win32;
 using System.Diagnostics;
@@ -117,7 +118,7 @@ public class ReferenceAnalyzer
 
         try
         {
-            var parts = SplitRegistryPath(program.RegistryKeyPath);
+            var parts = RegistryHelper.SplitRegistryPath(program.RegistryKeyPath);
             if (parts == null) return;
 
             using var key = parts.Value.root.OpenSubKey(parts.Value.subKey);
@@ -126,7 +127,7 @@ public class ReferenceAnalyzer
             foreach (var valName in key.GetValueNames())
             {
                 var val = key.GetValue(valName, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
-                if (val is string strVal && ContainsPath(strVal, installPath))
+                if (val is string strVal && PathHelper.ContainsPath(strVal, installPath))
                 {
                     program.References.Add(new ProgramReference
                     {
@@ -233,7 +234,7 @@ public class ReferenceAnalyzer
                         continue;
 
                     var val = key.GetValue(valName, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
-                    if (val == null || !ContainsPath(val, installPath)) continue;
+                    if (val == null || !PathHelper.ContainsPath(val, installPath)) continue;
 
                     var fullKeyPath = $"{rootKey.Name}\\{keyPath}";
 
@@ -281,29 +282,7 @@ public class ReferenceAnalyzer
     private static void ScanShortcuts(InstalledProgram program, string installPath,
         IProgress<string>? progress, CancellationToken ct)
     {
-        var searchDirs = new List<string>();
-
-        // All users desktop
-        var allUsersDesktop = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
-        if (!string.IsNullOrEmpty(allUsersDesktop)) searchDirs.Add(allUsersDesktop);
-
-        // Current user desktop
-        var userDesktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-        if (!string.IsNullOrEmpty(userDesktop)) searchDirs.Add(userDesktop);
-
-        // All users start menu
-        var allUsersStartMenu = Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu);
-        if (!string.IsNullOrEmpty(allUsersStartMenu)) searchDirs.Add(allUsersStartMenu);
-
-        // Current user start menu
-        var userStartMenu = Environment.GetFolderPath(Environment.SpecialFolder.StartMenu);
-        if (!string.IsNullOrEmpty(userStartMenu)) searchDirs.Add(userStartMenu);
-
-        // Quick Launch
-        var quickLaunch = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            @"Microsoft\Internet Explorer\Quick Launch");
-        if (Directory.Exists(quickLaunch)) searchDirs.Add(quickLaunch);
+        var searchDirs = ShortcutHelper.GetShortcutSearchDirectories();
 
         foreach (var dir in searchDirs)
         {
@@ -317,8 +296,8 @@ public class ReferenceAnalyzer
                     ct.ThrowIfCancellationRequested();
                     try
                     {
-                        var target = GetShortcutTarget(lnkFile);
-                        if (target != null && ContainsPath(target, installPath))
+                        var target = ShortcutHelper.GetShortcutTarget(lnkFile);
+                        if (target != null && PathHelper.ContainsPath(target, installPath))
                         {
                             program.References.Add(new ProgramReference
                             {
@@ -343,25 +322,6 @@ public class ReferenceAnalyzer
         }
     }
 
-    private static string? GetShortcutTarget(string lnkPath)
-    {
-        try
-        {
-            var shellType = Type.GetTypeFromProgID("WScript.Shell");
-            if (shellType == null) return null;
-            dynamic shell = Activator.CreateInstance(shellType)!;
-            dynamic shortcut = shell.CreateShortcut(lnkPath);
-            string target = shortcut.TargetPath;
-            string workDir = shortcut.WorkingDirectory;
-            System.Runtime.InteropServices.Marshal.ReleaseComObject(shortcut);
-            System.Runtime.InteropServices.Marshal.ReleaseComObject(shell);
-            return !string.IsNullOrEmpty(target) ? target : workDir;
-        }
-        catch
-        {
-            return null;
-        }
-    }
 
     #endregion
 
@@ -384,7 +344,7 @@ public class ReferenceAnalyzer
                     if (svcKey == null) continue;
 
                     var imagePath = svcKey.GetValue("ImagePath") as string;
-                    if (imagePath == null || !ContainsPath(imagePath, installPath)) continue;
+                    if (imagePath == null || !PathHelper.ContainsPath(imagePath, installPath)) continue;
 
                     // Avoid duplicates with registry scan
                     var fullPath = $@"HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\{svcName}";
@@ -434,7 +394,7 @@ public class ReferenceAnalyzer
                 {
                     if (name.Equals("Path", StringComparison.OrdinalIgnoreCase)) continue;
                     var val = envKey.GetValue(name, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
-                    if (val != null && ContainsPath(val, installPath))
+                    if (val != null && PathHelper.ContainsPath(val, installPath))
                     {
                         program.References.Add(new ProgramReference
                         {
@@ -463,7 +423,7 @@ public class ReferenceAnalyzer
                 {
                     if (name.Equals("Path", StringComparison.OrdinalIgnoreCase)) continue;
                     var val = envKey.GetValue(name, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
-                    if (val != null && ContainsPath(val, installPath))
+                    if (val != null && PathHelper.ContainsPath(val, installPath))
                     {
                         program.References.Add(new ProgramReference
                         {
@@ -492,7 +452,7 @@ public class ReferenceAnalyzer
         var parts = value.Split(';');
         foreach (var part in parts)
         {
-            if (ContainsPath(part.Trim(), installPath))
+            if (PathHelper.ContainsPath(part.Trim(), installPath))
             {
                 var location = target == EnvironmentVariableTarget.Machine
                     ? "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment"
@@ -566,7 +526,7 @@ public class ReferenceAnalyzer
 
         foreach (var line in _scheduledTasksCache!)
         {
-            if (ContainsPath(line, installPath))
+            if (PathHelper.ContainsPath(line, installPath))
             {
                 var fields = ParseCsvLine(line);
                 var taskName = fields.Count > 1 ? fields[1] : "未知任务";
@@ -615,7 +575,7 @@ public class ReferenceAnalyzer
                     if (fi.Length > 10 * 1024 * 1024) continue; // skip files > 10MB
 
                     var content = File.ReadAllText(file);
-                    if (ContainsPath(content, installPath))
+                    if (PathHelper.ContainsPath(content, installPath))
                     {
                         program.References.Add(new ProgramReference
                         {
@@ -744,55 +704,6 @@ public class ReferenceAnalyzer
     #endregion
 
     #region Helpers
-
-    private static bool ContainsPath(string text, string path)
-    {
-        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(path)) return false;
-
-        // Direct match
-        if (text.Contains(path, StringComparison.OrdinalIgnoreCase)) return true;
-
-        // Match with trailing backslash
-        if (text.Contains(path + "\\", StringComparison.OrdinalIgnoreCase)) return true;
-
-        // Match forward slashes
-        var fwdPath = path.Replace('\\', '/');
-        if (text.Contains(fwdPath, StringComparison.OrdinalIgnoreCase)) return true;
-
-        // Match quoted paths
-        var quotedPath = "\"" + path;
-        if (text.Contains(quotedPath, StringComparison.OrdinalIgnoreCase)) return true;
-
-        return false;
-    }
-
-    private static (RegistryKey root, string subKey)? SplitRegistryPath(string fullPath)
-    {
-        RegistryKey? root = null;
-        string subKey;
-
-        if (fullPath.StartsWith("HKEY_LOCAL_MACHINE\\", StringComparison.OrdinalIgnoreCase))
-        {
-            root = Registry.LocalMachine;
-            subKey = fullPath["HKEY_LOCAL_MACHINE\\".Length..];
-        }
-        else if (fullPath.StartsWith("HKEY_CURRENT_USER\\", StringComparison.OrdinalIgnoreCase))
-        {
-            root = Registry.CurrentUser;
-            subKey = fullPath["HKEY_CURRENT_USER\\".Length..];
-        }
-        else if (fullPath.StartsWith("HKEY_CLASSES_ROOT\\", StringComparison.OrdinalIgnoreCase))
-        {
-            root = Registry.ClassesRoot;
-            subKey = fullPath["HKEY_CLASSES_ROOT\\".Length..];
-        }
-        else
-        {
-            return null;
-        }
-
-        return (root, subKey);
-    }
 
     private static List<string> ParseCsvLine(string line)
     {
