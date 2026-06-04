@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using CDriveMigrator.Helpers;
 
 namespace CDriveMigrator.Services;
 
@@ -16,6 +17,11 @@ public static class JunctionManager
         }
 
         targetPath = Path.GetFullPath(targetPath);
+
+        if (!PathValidator.IsSafeForShell(junctionPath))
+            throw new InvalidOperationException($"联接点路径包含不安全字符: {PathValidator.SanitizeForDisplay(junctionPath)}");
+        if (!PathValidator.IsSafeForShell(targetPath))
+            throw new InvalidOperationException($"目标路径包含不安全字符: {PathValidator.SanitizeForDisplay(targetPath)}");
 
         var psi = new ProcessStartInfo
         {
@@ -64,10 +70,14 @@ public static class JunctionManager
 
         try
         {
+            var parentDir = Path.GetDirectoryName(junctionPath);
+            if (parentDir == null || !PathValidator.IsSafeForShell(parentDir))
+                return null;
+
             var psi = new ProcessStartInfo
             {
                 FileName = "cmd.exe",
-                Arguments = $"/c dir \"{Path.GetDirectoryName(junctionPath)}\" /AL",
+                Arguments = $"/c dir \"{parentDir}\" /AL",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 CreateNoWindow = true
