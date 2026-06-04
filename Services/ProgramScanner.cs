@@ -101,7 +101,7 @@ public class ProgramScanner
     /// <summary>
     /// 扫描后自动预评估：根据安装路径、发布者、名称关键词判断迁移安全性
     /// </summary>
-    private static void AssessRecommendation(InstalledProgram p)
+    internal static void AssessRecommendation(InstalledProgram p)
     {
         var reasons = new List<string>();
         int score = 50; // 0=危险, 50=中性, 100=安全
@@ -282,7 +282,7 @@ public class ProgramScanner
         }
     }
 
-    private static bool IsSystemRoot(string path)
+    internal static bool IsSystemRoot(string path)
     {
         var normalized = path.TrimEnd('\\');
         if (SystemDirs.Contains(normalized)) return true;

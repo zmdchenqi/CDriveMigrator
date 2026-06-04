@@ -1,0 +1,28 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CDriveMigrator", "CDriveMigrator.csproj", "{58814E14-B6D9-4F50-8414-082104F3CF52}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CDriveMigrator.Tests", "CDriveMigrator.Tests\CDriveMigrator.Tests.csproj", "{3D811058-58CB-47D4-BEB2-DF72E239984A}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{58814E14-B6D9-4F50-8414-082104F3CF52}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{58814E14-B6D9-4F50-8414-082104F3CF52}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{58814E14-B6D9-4F50-8414-082104F3CF52}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{58814E14-B6D9-4F50-8414-082104F3CF52}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3D811058-58CB-47D4-BEB2-DF72E239984A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3D811058-58CB-47D4-BEB2-DF72E239984A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3D811058-58CB-47D4-BEB2-DF72E239984A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3D811058-58CB-47D4-BEB2-DF72E239984A}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

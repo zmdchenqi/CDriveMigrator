@@ -698,7 +698,7 @@ public class ReferenceAnalyzer
 
     #region Helpers
 
-    private static bool ContainsPath(string text, string path)
+    internal static bool ContainsPath(string text, string path)
     {
         if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(path)) return false;
 
@@ -719,7 +719,7 @@ public class ReferenceAnalyzer
         return false;
     }
 
-    private static (RegistryKey root, string subKey)? SplitRegistryPath(string fullPath)
+    internal static (RegistryKey root, string subKey)? SplitRegistryPath(string fullPath)
     {
         RegistryKey? root = null;
         string subKey;
@@ -747,7 +747,7 @@ public class ReferenceAnalyzer
         return (root, subKey);
     }
 
-    private static List<string> ParseCsvLine(string line)
+    internal static List<string> ParseCsvLine(string line)
     {
         var fields = new List<string>();
         var inQuotes = false;
