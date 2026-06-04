@@ -246,34 +246,9 @@ public class MigrationEngine
 
     private async Task ForceKillLockingProcesses(string dirPath, CancellationToken ct)
     {
-        // 用 handle.exe 或者遍历进程模块来查找锁定文件的进程
-        try
-        {
-            foreach (var proc in Process.GetProcesses())
-            {
-                try
-                {
-                    // 检查主模块
-                    var mainPath = proc.MainModule?.FileName;
-                    if (mainPath != null && mainPath.StartsWith(dirPath, StringComparison.OrdinalIgnoreCase))
-                    {
-                        Log?.Invoke($"  强制终止占用进程: {proc.ProcessName} (PID:{proc.Id})");
-                        proc.Kill(true);
-                        await proc.WaitForExitAsync(ct).WaitAsync(TimeSpan.FromSeconds(5), ct);
-                    }
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    Log?.Invoke($"  ⚠ 检查/终止进程失败: {ex.Message}");
-                }
-                finally { proc.Dispose(); }
-            }
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            Log?.Invoke($"  ⚠ 枚举进程失败: {ex.Message}");
-        }
-        
+        await ProcessHelper.KillProcessesInDirectoryAsync(
+            dirPath, msg => Log?.Invoke($"  强制{msg}"), ct);
+
         // 等待文件句柄释放
         await Task.Delay(2000, ct);
     }
@@ -322,7 +297,7 @@ public class MigrationEngine
         {
             try
             {
-                var parts = SplitRegistryPath(r.Location);
+                var parts = RegistryHelper.SplitRegistryPath(r.Location);
                 if (parts == null) { result.FailedFixes.Add($"无法解析: {r.Location}"); continue; }
 
                 using var key = parts.Value.root.OpenSubKey(parts.Value.subKey, writable: true);
@@ -332,7 +307,7 @@ public class MigrationEngine
                 var currentValue = key.GetValue(r.ValueName, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
                 if (currentValue == null) continue;
 
-                var newValue = ReplacePathInString(currentValue, oldPath, newPath);
+                var newValue = PathHelper.ReplacePathInString(currentValue, oldPath, newPath);
                 if (newValue != currentValue)
                 {
                     key.SetValue(r.ValueName, newValue, kind);
@@ -367,13 +342,13 @@ public class MigrationEngine
                 string iconLoc = shortcut.IconLocation ?? "";
                 bool changed = false;
 
-                var newTarget = ReplacePathInString(target, oldPath, newPath);
+                var newTarget = PathHelper.ReplacePathInString(target, oldPath, newPath);
                 if (newTarget != target) { shortcut.TargetPath = newTarget; changed = true; }
 
-                var newWorkDir = ReplacePathInString(workDir, oldPath, newPath);
+                var newWorkDir = PathHelper.ReplacePathInString(workDir, oldPath, newPath);
                 if (newWorkDir != workDir) { shortcut.WorkingDirectory = newWorkDir; changed = true; }
 
-                var newIcon = ReplacePathInString(iconLoc, oldPath, newPath);
+                var newIcon = PathHelper.ReplacePathInString(iconLoc, oldPath, newPath);
                 if (newIcon != iconLoc) { shortcut.IconLocation = newIcon; changed = true; }
 
                 if (changed)
@@ -411,7 +386,7 @@ public class MigrationEngine
                 var imagePath = key.GetValue("ImagePath") as string;
                 if (imagePath == null) continue;
 
-                var newImagePath = ReplacePathInString(imagePath, oldPath, newPath);
+                var newImagePath = PathHelper.ReplacePathInString(imagePath, oldPath, newPath);
                 if (newImagePath != imagePath)
                 {
                     key.SetValue("ImagePath", newImagePath);
@@ -449,7 +424,7 @@ public class MigrationEngine
                 var currentValue = key.GetValue(r.ValueName, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
                 if (currentValue == null) continue;
 
-                var newValue = ReplacePathInString(currentValue, oldPath, newPath);
+                var newValue = PathHelper.ReplacePathInString(currentValue, oldPath, newPath);
                 if (newValue != currentValue)
                 {
                     key.SetValue(r.ValueName, newValue, kind);
@@ -483,17 +458,17 @@ public class MigrationEngine
                 try
                 {
                     // Export
-                    RunProcess("schtasks.exe", $"/query /tn \"{taskName}\" /xml ONE", out var xml);
+                    ProcessHelper.RunProcess("schtasks.exe", $"/query /tn \"{taskName}\" /xml ONE", out var xml);
                     if (string.IsNullOrEmpty(xml)) continue;
 
-                    var newXml = ReplacePathInString(xml, oldPath, newPath);
+                    var newXml = PathHelper.ReplacePathInString(xml, oldPath, newPath);
                     if (newXml == xml) continue;
 
                     File.WriteAllText(exportPath, newXml, Encoding.Unicode);
 
                     // Delete and recreate
-                    RunProcess("schtasks.exe", $"/delete /tn \"{taskName}\" /f", out _);
-                    RunProcess("schtasks.exe", $"/create /tn \"{taskName}\" /xml \"{exportPath}\"", out var createOutput);
+                    ProcessHelper.RunProcess("schtasks.exe", $"/delete /tn \"{taskName}\" /f", out _);
+                    ProcessHelper.RunProcess("schtasks.exe", $"/create /tn \"{taskName}\" /xml \"{exportPath}\"", out var createOutput);
 
                     r.NewValue = newPath;
                     r.IsFixed = true;
@@ -526,7 +501,7 @@ public class MigrationEngine
                 if (!File.Exists(newFilePath)) continue;
 
                 var content = File.ReadAllText(newFilePath);
-                var newContent = ReplacePathInString(content, oldPath, newPath);
+                var newContent = PathHelper.ReplacePathInString(content, oldPath, newPath);
 
                 if (newContent != content)
                 {
@@ -552,30 +527,9 @@ public class MigrationEngine
     private async Task KillRelatedProcesses(InstalledProgram program, string installPath,
         MigrationSnapshot snapshot, CancellationToken ct)
     {
-        var processes = Process.GetProcesses();
-        foreach (var proc in processes)
-        {
-            ct.ThrowIfCancellationRequested();
-            try
-            {
-                var procPath = proc.MainModule?.FileName;
-                if (procPath != null && procPath.StartsWith(installPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    Log?.Invoke($"  停止进程: {proc.ProcessName} (PID: {proc.Id})");
-                    snapshot.KilledProcesses.Add(proc.MainModule!.FileName);
-                    proc.Kill(entireProcessTree: true);
-                    await proc.WaitForExitAsync(ct).WaitAsync(TimeSpan.FromSeconds(10), ct);
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                Log?.Invoke($"  ⚠ 停止进程 {proc.ProcessName} 失败: {ex.Message}");
-            }
-            finally
-            {
-                proc.Dispose();
-            }
-        }
+        var killed = await ProcessHelper.KillProcessesInDirectoryAsync(
+            installPath, msg => Log?.Invoke($"  {msg}"), ct);
+        snapshot.KilledProcesses.AddRange(killed);
     }
 
     private async Task StopRelatedServices(InstalledProgram program, CancellationToken ct, MigrationResult? result = null)
@@ -731,7 +685,7 @@ public class MigrationEngine
         var r = backup.Reference;
         if (r.Type != ReferenceType.RegistryValue && r.Type != ReferenceType.EnvironmentVariable) return;
 
-        var parts = SplitRegistryPath(r.Location);
+        var parts = RegistryHelper.SplitRegistryPath(r.Location);
         if (parts == null) return;
 
         using var key = parts.Value.root.OpenSubKey(parts.Value.subKey, writable: true);
@@ -826,82 +780,6 @@ public class MigrationEngine
     #endregion
 
     #region Helpers
-
-    private static string ReplacePathInString(string text, string oldPath, string newPath)
-    {
-        if (string.IsNullOrEmpty(text)) return text;
-
-        var result = text;
-
-        // Replace with exact case variations
-        result = ReplaceIgnoreCase(result, oldPath + "\\", newPath + "\\");
-        result = ReplaceIgnoreCase(result, oldPath + "/", newPath + "/");
-        result = ReplaceIgnoreCase(result, oldPath + "\"", newPath + "\"");
-        result = ReplaceIgnoreCase(result, oldPath, newPath);
-
-        // Replace forward-slash variants
-        var oldFwd = oldPath.Replace('\\', '/');
-        var newFwd = newPath.Replace('\\', '/');
-        result = ReplaceIgnoreCase(result, oldFwd, newFwd);
-
-        return result;
-    }
-
-    private static string ReplaceIgnoreCase(string input, string oldValue, string newValue)
-    {
-        int index = 0;
-        var sb = new StringBuilder(input.Length);
-        while (index < input.Length)
-        {
-            var pos = input.IndexOf(oldValue, index, StringComparison.OrdinalIgnoreCase);
-            if (pos < 0)
-            {
-                sb.Append(input, index, input.Length - index);
-                break;
-            }
-            sb.Append(input, index, pos - index);
-            sb.Append(newValue);
-            index = pos + oldValue.Length;
-        }
-        return sb.ToString();
-    }
-
-    private static (RegistryKey root, string subKey)? SplitRegistryPath(string fullPath)
-    {
-        if (fullPath.StartsWith("HKEY_LOCAL_MACHINE\\", StringComparison.OrdinalIgnoreCase))
-            return (Registry.LocalMachine, fullPath["HKEY_LOCAL_MACHINE\\".Length..]);
-        if (fullPath.StartsWith("HKLM\\", StringComparison.OrdinalIgnoreCase))
-            return (Registry.LocalMachine, fullPath["HKLM\\".Length..]);
-        if (fullPath.StartsWith("HKEY_CURRENT_USER\\", StringComparison.OrdinalIgnoreCase))
-            return (Registry.CurrentUser, fullPath["HKEY_CURRENT_USER\\".Length..]);
-        if (fullPath.StartsWith("HKCU\\", StringComparison.OrdinalIgnoreCase))
-            return (Registry.CurrentUser, fullPath["HKCU\\".Length..]);
-        if (fullPath.StartsWith("HKEY_CLASSES_ROOT\\", StringComparison.OrdinalIgnoreCase))
-            return (Registry.ClassesRoot, fullPath["HKEY_CLASSES_ROOT\\".Length..]);
-        return null;
-    }
-
-    private static int RunProcess(string fileName, string arguments, out string output)
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = fileName,
-            Arguments = arguments,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-        using var proc = Process.Start(psi)
-            ?? throw new InvalidOperationException($"无法启动进程: {fileName}");
-        // Read stderr asynchronously to prevent deadlock when both streams are redirected
-        var stderrTask = proc.StandardError.ReadToEndAsync();
-        output = proc.StandardOutput.ReadToEnd();
-        stderrTask.Wait(30000);
-        if (!proc.WaitForExit(30000))
-            throw new TimeoutException($"进程 '{fileName}' 在 30 秒内未退出");
-        return proc.ExitCode;
-    }
 
     [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Auto)]
     private static extern IntPtr SendMessageTimeout(

@@ -559,35 +559,13 @@ public class MainViewModel : INotifyPropertyChanged
         long sizeFreed = program.SizeBytes;
         var installPath = program.InstallLocation;
 
+        // 1. 强制结束安装目录下的所有进程
+        AddLog($"  [1/4] 结束相关进程...");
+        await ProcessHelper.KillProcessesInDirectoryAsync(
+            installPath, msg => AddLog($"    {msg}"), ct);
+
         await Task.Run(() =>
         {
-            // 1. 强制结束安装目录下的所有进程
-            AddLog($"  [1/4] 结束相关进程...");
-            try
-            {
-                foreach (var proc in Process.GetProcesses())
-                {
-                    try
-                    {
-                        var exePath = proc.MainModule?.FileName;
-                        if (exePath != null && exePath.StartsWith(installPath, StringComparison.OrdinalIgnoreCase))
-                        {
-                            AddLog($"    终止进程: {proc.ProcessName} (PID: {proc.Id})");
-                            proc.Kill(true);
-                            proc.WaitForExit(5000);
-                        }
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        AddLog($"    ⚠ 终止进程失败: {ex.Message}");
-                    }
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                AddLog($"    ⚠ 枚举进程失败: {ex.Message}");
-            }
-
             ct.ThrowIfCancellationRequested();
 
             // 2. 删除安装目录
@@ -723,18 +701,11 @@ public class MainViewModel : INotifyPropertyChanged
         {
             try
             {
-                var parts = r.Location.Split('\\', 2);
-                Microsoft.Win32.RegistryKey? root = parts[0] switch
-                {
-                    "HKEY_LOCAL_MACHINE" => Microsoft.Win32.Registry.LocalMachine,
-                    "HKEY_CURRENT_USER" => Microsoft.Win32.Registry.CurrentUser,
-                    "HKEY_CLASSES_ROOT" => Microsoft.Win32.Registry.ClassesRoot,
-                    _ => null
-                };
+                var parts = RegistryHelper.SplitRegistryPath(r.Location);
 
-                if (root != null && parts.Length > 1)
+                if (parts != null)
                 {
-                    using var k = root.OpenSubKey(parts[1], true);
+                    using var k = parts.Value.root.OpenSubKey(parts.Value.subKey, true);
                     if (k != null && !string.IsNullOrEmpty(r.ValueName))
                     {
                         k.DeleteValue(r.ValueName, false);
@@ -750,24 +721,18 @@ public class MainViewModel : INotifyPropertyChanged
 
     private void CleanShortcuts(InstalledProgram program)
     {
-        var searchDirs = new[]
-        {
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory),
-            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu),
-            Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),
-        };
+        var searchDirs = ShortcutHelper.GetShortcutSearchDirectories();
 
         foreach (var dir in searchDirs)
         {
-            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) continue;
+            if (!Directory.Exists(dir)) continue;
             try
             {
                 foreach (var lnk in Directory.EnumerateFiles(dir, "*.lnk", SearchOption.AllDirectories))
                 {
                     try
                     {
-                        var target = GetShortcutTarget(lnk);
+                        var target = ShortcutHelper.GetShortcutTarget(lnk);
                         if (target != null && target.StartsWith(program.InstallLocation, StringComparison.OrdinalIgnoreCase))
                         {
                             File.Delete(lnk);
@@ -785,22 +750,6 @@ public class MainViewModel : INotifyPropertyChanged
                 AddLog($"    ⚠ 扫描快捷方式目录 {dir} 失败: {ex.Message}");
             }
         }
-    }
-
-    private static string? GetShortcutTarget(string lnkPath)
-    {
-        try
-        {
-            var shellType = Type.GetTypeFromProgID("WScript.Shell");
-            if (shellType == null) return null;
-            dynamic shell = Activator.CreateInstance(shellType)!;
-            dynamic shortcut = shell.CreateShortcut(lnkPath);
-            string target = shortcut.TargetPath;
-            System.Runtime.InteropServices.Marshal.ReleaseComObject(shortcut);
-            System.Runtime.InteropServices.Marshal.ReleaseComObject(shell);
-            return target;
-        }
-        catch { return null; }
     }
 
     private void SelectAll()
